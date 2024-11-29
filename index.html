@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavikEye KML Downloader/Router/Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    <script src="https://unpkg.com/togeojson"></script> <!-- Add togeojson library to parse KML -->
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 2em;
+            margin-top: 20px;
+            color: #333;
+            text-align: center;
+        }
+
+        #demo {
+            width: 100%;
+            max-width: 900px;
+            height: 500px;
+            margin-top: 20px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+        }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 900px;
+            padding: 20px;
+            text-align: center;
+            background-color: #fff;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+            border-radius: 8px;
+        }
+
+        .input-container {
+            display: flex;
+            flex-direction: column;
+            width: 45%;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"], input[type="file"], button {
+            padding: 10px;
+            margin: 10px 0;
+            width: 100%;
+            font-size: 1em;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1em;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        .file-input {
+            border: none;
+            background-color: transparent;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .btn-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            width: 45%;
+        }
+
+        .file-container {
+            margin-top: 10px;
+        }
+
+        /* For mobile responsiveness */
+        @media screen and (max-width: 600px) {
+            .container {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .input-container, .btn-container {
+                width: 100%;
+            }
+        }
+        
+    .leaflet-routing-alt {
+        display: none;
+    }
+    .leaflet-routing-container {
+        display: none;
+    }
+    .leaflet-control-geocoder-icon{
+        display: none;
+    }
+    </style>
+</head>
+<body>
+
+    <h1><b>NavikEye KML Downloader/Router/Viewer</b></h1>
+    
+    <div class="container">
+        <div>
+            <input type="text" id="source" placeholder="Enter Source Address">
+            <input type="text" id="destination" placeholder="Enter Destination Address">
+        </div>
+        <div class="btn-container">
+            <button onclick="downloadKML()">Download KML</button>
+            <input type="file" id="file" class="form-control file-input" onchange="loadKML()" />
+        </div>
+        <button onclick="getRoute()">Get Route</button>
+    </div>
+
+    <div id="demo"></div>
+
+    <script>
+        var map = L.map('demo').setView([13.19864, 77.70659], 5); // Default view in case geocoding fails
+        var routingControl;
+        var routeCoordinates = [];  // Array to store route coordinates
+
+        // Add OpenStreetMap tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18
+        }).addTo(map);
+        
+        // Add the Geocoder control to the map
+    L.Control.geocoder({
+        placeholder: "Search for a location...",
+        geocoder: L.Control.Geocoder.nominatim() // Use Nominatim geocoder service
+    }).on('markgeocode', function(e) {
+        var latlng = e.geocode.center; // Get the latitude and longitude of the selected location
+        var marker = L.marker(latlng).addTo(map); // Add a marker to the map at the selected location
+        marker.bindPopup(e.geocode.name).openPopup(); // Show the place name in a popup
+    }).addTo(map);
+
+
+        // Initialize Geocoder with Autocomplete
+        var geocoder = L.Control.Geocoder.nominatim();
+
+        // Function to get route between two addresses
+        function getRoute() {
+            var source = document.getElementById('source').value;
+            var destination = document.getElementById('destination').value;
+
+            if (source === "" || destination === "") {
+                alert("Please enter both source and destination addresses.");
+                return;
+            }
+
+            // Geocode source address
+            geocoder.geocode(source, function(results) {
+                if (results.length === 0) {
+                    alert("Source address not found.");
+                    return;
+                }
+                var sourceLatLng = results[0].center;
+
+                // Geocode destination address
+                geocoder.geocode(destination, function(results) {
+                    if (results.length === 0) {
+                        alert("Destination address not found.");
+                        return;
+                    }
+                    var destLatLng = results[0].center;
+
+                    // If a route control already exists, remove it
+                    if (routingControl) {
+                        map.removeControl(routingControl);
+                    }
+
+                    // Create and add route control
+                    routingControl = L.Routing.control({
+                        waypoints: [
+                            L.latLng(sourceLatLng.lat, sourceLatLng.lng),
+                            L.latLng(destLatLng.lat, destLatLng.lng)
+                        ],
+                        routeWhileDragging: true
+                    }).on('routesfound', function(event) {
+                        // Store the route coordinates when the route is found
+                        routeCoordinates = event.routes[0].coordinates;
+                    }).addTo(map);
+
+                    // Adjust the map view to fit the route
+                    map.fitBounds(routingControl.getBounds());
+                });
+            });
+        }
+
+        // Function to download KML from the plotted route coordinates
+    function downloadKML() {
+            if (routeCoordinates.length === 0) {
+                alert("No route to download.");
+                return;
+            }
+
+            let kmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Directions Source to Destination</name>
+    <Style id="icon-1899-DB4436-nodesc-normal">
+      <IconStyle>
+        <color>ff3644db</color>
+        <scale>1</scale>
+        <Icon>
+          <href>https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png</href>
+        </Icon>
+        <hotSpot x="32" xunits="pixels" y="64" yunits="insetPixels"/>
+      </IconStyle>
+      <LabelStyle>
+        <scale>0</scale>
+      </LabelStyle>
+      <BalloonStyle>
+        <text><![CDATA[<h3>$[name]</h3>]]></text>
+      </BalloonStyle>
+    </Style>
+    <Style id="icon-1899-DB4436-nodesc-highlight">
+      <IconStyle>
+        <color>ff3644db</color>
+        <scale>1</scale>
+        <Icon>
+          <href>https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png</href>
+        </Icon>
+        <hotSpot x="32" xunits="pixels" y="64" yunits="insetPixels"/>
+      </IconStyle>
+      <LabelStyle>
+        <scale>1</scale>
+      </LabelStyle>
+      <BalloonStyle>
+        <text><![CDATA[<h3>$[name]</h3>]]></text>
+      </BalloonStyle>
+    </Style>
+    <StyleMap id="icon-1899-DB4436-nodesc">
+      <Pair>
+        <key>normal</key>
+        <styleUrl>#icon-1899-DB4436-nodesc-normal</styleUrl>
+      </Pair>
+      <Pair>
+        <key>highlight</key>
+        <styleUrl>#icon-1899-DB4436-nodesc-highlight</styleUrl>
+      </Pair>
+    </StyleMap>
+    <Style id="line-1267FF-5000-nodesc-normal">
+      <LineStyle>
+        <color>ffff6712</color>
+        <width>5</width>
+      </LineStyle>
+      <BalloonStyle>
+        <text><![CDATA[<h3>$[name]</h3>]]></text>
+      </BalloonStyle>
+    </Style>
+    <Style id="line-1267FF-5000-nodesc-highlight">
+      <LineStyle>
+        <color>ffff6712</color>
+        <width>7.5</width>
+      </LineStyle>
+      <BalloonStyle>
+        <text><![CDATA[<h3>$[name]</h3>]]></text>
+      </BalloonStyle>
+    </Style>
+    <StyleMap id="line-1267FF-5000-nodesc">
+      <Pair>
+        <key>normal</key>
+        <styleUrl>#line-1267FF-5000-nodesc-normal</styleUrl>
+      </Pair>
+      <Pair>
+        <key>highlight</key>
+        <styleUrl>#line-1267FF-5000-nodesc-highlight</styleUrl>
+      </Pair>
+    </StyleMap>
+    <Placemark>
+      <name>Directions from Source to Destination</name>
+      <styleUrl>#line-1267FF-5000-nodesc</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>`;
+
+            // Convert the routeCoordinates into the correct KML coordinate format (longitude,latitude,0)
+            let kmlCoordinates = routeCoordinates.map(coord => `${coord.lng},${coord.lat},0`).join("\n");
+
+            let kmlFooter = `</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Source</name>
+      <styleUrl>#icon-1899-DB4436-nodesc</styleUrl>
+      <Point>
+        <coordinates>`;
+
+            // First coordinate (starting point)
+            let firstCoordinate = routeCoordinates[0];
+            let kmlFirstPoint = `${firstCoordinate.lng},${firstCoordinate.lat},0`;
+
+            let kmlSecond = `</coordinates></Point></Placemark>
+    <Placemark>
+      <name>Source</name>
+      <styleUrl>#icon-1899-DB4436-nodesc</styleUrl>
+      <Point>
+        <coordinates>`;
+
+            // Last coordinate (ending point)
+            let lastCoordinate = routeCoordinates[routeCoordinates.length - 1];  //defnition to get the points
+            let kmlSecondPoint = `${lastCoordinate.lng},${lastCoordinate.lat},0`;
+
+            let kmlFooterEnd = `</coordinates>
+      </Point>
+    </Placemark>
+  </Document>
+</kml>`;
+
+            // Combine all parts to form the full KML data
+            let kmlData = kmlHeader + "\n"+ kmlCoordinates +"\n"+ kmlFooter  + kmlFirstPoint + kmlSecond +kmlSecondPoint + kmlFooterEnd;
+
+            // Create a Blob with KML data and trigger the download
+            let blob = new Blob([kmlData], { type: 'application/vnd.google-earth.kml+xml' });
+            let link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'route.kml';
+            link.click();
+        }  
+        // Handle KML file upload and plot it on the map
+function loadKML() {
+    const fileInput = document.getElementById('file');
+    const file = fileInput.files[0];
+    
+    if (file) {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+            const kmlText = e.target.result;
+            
+            // Parse KML XML string
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(kmlText, 'application/xml');
+            
+            // Extract coordinates from KML document
+            const coordinates = extractCoordinatesFromKML(xmlDoc);
+
+            // Clear the existing route (if any) before drawing a new one
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+
+            // Plot the extracted coordinates as a polyline on the map
+            L.polyline(coordinates, {
+                color: 'blue',  // Line color
+                weight: 4,
+                opacity: 0.7
+            }).addTo(map);
+
+            // Adjust the map bounds to fit the coordinates
+            const latLngs = coordinates.map(coord => [coord.lat, coord.lng]);
+            map.fitBounds(latLngs);
+        };
+
+        reader.readAsText(file);
+    }
+}
+
+// Extract coordinates from KML XML document
+function extractCoordinatesFromKML(xmlDoc) {
+    const coordinates = [];
+    
+    // Get all the coordinates in the KML file (adjusted to handle namespaces)
+    const namespace = "http://www.opengis.net/kml/2.2";
+    const coordElements = xmlDoc.getElementsByTagNameNS(namespace, 'coordinates');
+    
+    // Loop through all coordinates and extract them
+    for (let i = 0; i < coordElements.length-2; i++) {
+        const coordText = coordElements[i].textContent.trim();
+        const coordArray = coordText.split(/\s+/);
+        
+        coordArray.forEach(function(coord) {
+            if (coord) {
+                const parts = coord.split(',');
+                const lon = parseFloat(parts[0]);
+                const lat = parseFloat(parts[1]);
+                coordinates.push({ lat: lat, lng: lon });
+            }
+        });
+    }
+
+    return coordinates;
+}
+
+    </script>
+</body>
+</html>
